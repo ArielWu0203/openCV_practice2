@@ -6,6 +6,7 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 
+
 class HW2App(QtWidgets.QDialog , window.Ui_Dialog):
     def __init__(self, parant=None):
         super(HW2App, self).__init__(parant)
@@ -51,6 +52,8 @@ class HW2App(QtWidgets.QDialog , window.Ui_Dialog):
     def btn3_1_Clicked(self):
         cap = cv2.VideoCapture("res/featureTracking.mp4")
         _, im = cap.read()
+        
+        # TODO : Detector
         params = cv2.SimpleBlobDetector_Params()
         params.filterByCircularity = True
         params.minCircularity = 0.83
@@ -59,12 +62,31 @@ class HW2App(QtWidgets.QDialog , window.Ui_Dialog):
         params.maxArea = 100.0
         detector = cv2.SimpleBlobDetector_create(params)
         keypoints = detector.detect(im)
-        im_with_keypoints = cv2.drawKeypoints(im, keypoints, np.array([]), (0,0,255), cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS) 
-        cv2.imshow("test1", im_with_keypoints) 
+        for i in range(0, len(keypoints)):
+            x,y = np.int(keypoints[i].pt[0]), np.int(keypoints[i].pt[1])
+            sz = np.int(keypoints[i].size)
+            if sz>1 :
+                sz = np.int(sz/2)
+            im = cv2.rectangle(im, (x-sz, y-sz), (x+sz, y+sz), color=(0,0,255), thickness=-1)
+        cv2.imshow("test1", im) 
 
     def btn3_2_Clicked(self):
-        cap = cv2.VideoCapture("res/featureTracking.mp4")
+        lk_params = dict(winSize = (21,21),
+                         maxLevel = 2,
+                         criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,10,0.03))
 
+        feature_params = dict(maxCorners = 10,
+                             qualityLevel = 0.3,
+                             minDistance = 2,
+                             blockSize = 7)
+
+        self.track_len = 10
+        self.detect_interval = 5
+        self.tracks = []
+        self.cam = cv2.VideoCapture("res/featureTracking.mp4")
+        self.frame_idx = 0
+
+        # TODO : Detector
         params = cv2.SimpleBlobDetector_Params()
         params.filterByCircularity = True
         params.minCircularity = 0.83
@@ -75,19 +97,58 @@ class HW2App(QtWidgets.QDialog , window.Ui_Dialog):
         detector = cv2.SimpleBlobDetector_create(params)
 
         while True:
-            ret , im = cap.read()
-            if ret is False:
+            _ret , frame = self.cam.read()
+            keypoints = detector.detect(frame)
+            for i in range(0, len(keypoints)):
+                x,y = np.int(keypoints[i].pt[0]), np.int(keypoints[i].pt[1])
+                sz = np.int(keypoints[i].size)
+                if sz>1 :
+                    sz = np.int(sz/2)
+                frame = cv2.rectangle(frame, (x-sz, y-sz), (x+sz, y+sz), color=(0,0,255), thickness=-1)
+            
+            if frame is None:
                 break
-            keypoints = detector.detect(im)
-            im_with_keypoints = cv2.drawKeypoints(im, keypoints, np.array([]), (0,0,255), cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS) 
-            cv2.imshow("test2", im_with_keypoints) 
+
+            frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            vis = frame.copy()
+
+            if(len(self.tracks)) > 0:
+                img0, img1 = self.prev_gray, frame_gray
+                p0 = np.float32([tr[-1] for tr in self.tracks]).reshape(-1,1,2)
+                p1, _st, _err = cv2.calcOpticalFlowPyrLK(img0,img1,p0,None,**lk_params)
+                p0r, _st, _err = cv2.calcOpticalFlowPyrLK(img1,img0,p1,None,**lk_params)
+                d = abs(p0-p0r).reshape(-1,2).max(-1)
+                good = d<1
+                new_tracks = []
+                for tr, (x,y), good_flag in zip(self.tracks, p1.reshape(-1, 2), good):
+                    if not good_flag:
+                        continue
+                    tr.append((x,y))
+                    if len(tr) > self.track_len:
+                        del tr[0]
+                    new_tracks.append(tr)
+                    cv2.circle(vis, (x,y), 2,(0,255,0),-1)
+                self.tracks = new_tracks
+                cv2.polylines(vis, [np.int32(tr) for tr in self.tracks], False, (0,255,0))
+                
+            if self.frame_idx % self.detect_interval == 0 :
+                mask = np.zeros_like(frame_gray)
+                mask[:] = 255
+                for x,y in [np.int32(tr[-1]) for tr in self.tracks]:
+                    cv2.circle(mask, (x,y), 5, 0, -1)
+                p = cv2.goodFeaturesToTrack(frame_gray,mask=mask, **feature_params)
+                if p is not None:
+                    for x,y in np.float32(p).reshape(-1,2):
+                        self.tracks.append([(x,y)])
+            
+            self.frame_idx += 1
+            self.prev_gray = frame_gray
+            cv2.imshow('lk_track', vis)
+        
 
             key = cv2.waitKey(30)
             if key == 'q' or key == 27:
                 break
-        
-        cap.release()
-        cv2.destroyAllWindows()
 
 
 def main():
